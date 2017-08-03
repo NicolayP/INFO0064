@@ -113,6 +113,11 @@ void interrupt timer(void){
 }
 
 int main() {
+    uint8_t bt = 0;
+    uint8_t sensor = 0;
+    const uint8_t OPEN = 0b00010001;
+    const uint8_t CLOSE = 0b00000100;
+    
     OSCCONbits.IRCF = 0b1100; //clock at 2MHz
     OSCCONbits.SPLLEN = 0b0; //PLL disable
     OSCCONbits.SCS = 0b11; //Internal clock
@@ -134,25 +139,28 @@ int main() {
     while(1){
         if(converstion){
             if(converstion > 312){
-                PWM2DCH = 0b00010001; 
+                sensor = 1;
                 LATCbits.LATC2 = 0b1;
             }else{
-                PWM2DCH = 0b00000100;
+                sensor = 0;
                 LATCbits.LATC2 = 0b0;
             }
             converstion = 0;
         } 
         if(uartValue){
             if(uartValue == 0x31){
+                bt = 1;
                 LATCbits.LATC1 = 0b1;
-                PWM2DCH = 0b00000100;
             }else if(uartValue == 0x32){   
+                bt = 0;
                 LATCbits.LATC1 = 0b0;
-                PWM2DCH = 0b00010001;
-            }else{
-                LATCbits.LATC2 = 0b1;
             }
             uartValue = 0;
+        }
+        if(sensor || bt){
+            PWM2DCH = OPEN;
+        }else{
+            PWM2DCH = CLOSE;
         }
     }
     return 0;
