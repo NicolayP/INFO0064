@@ -44,6 +44,9 @@
  * Test code that is suppose to blink a led at frequence of 1Hz
  */
 
+volatile char* msg = NULL;
+volatile uint8_t i = 0;
+volatile uint8_t done = 0;
 volatile uint8_t change = 0;
 volatile uint16_t converstion=0;
 volatile uint8_t uartValue = 0;
@@ -65,12 +68,15 @@ void UART_init(void){
     SPBRGH = 0;
     SPBRGL = 0b00110100; //Free running period of baud rate generator, found by
     //solving equation of page 262 of controller datasheet for a baud rate of 38400
-    TRISCbits.TRISC5 = 0b1;
+    TRISCbits.TRISC5 = 0b1; //RX input pin
+    TRISCbits.TRISC4 = 0b0; //TX output pin
     RCSTAbits.CREN = 0b1; //enable the receiver circuit
+    
     TXSTAbits.SYNC = 0b0; //configured for asynchronous operations
+    TXSTAbits.TXEN = 0b1; //Enables the transmitter circuit
     RCSTAbits.SPEN = 0b1; //enable UART
     RCSTAbits.RX9 = 0b0; //no ninth bits
-    
+    TXSTAbits.TX9 = 0b0;
     return;
 }
 
@@ -80,15 +86,39 @@ void PWM_init(void){
     PWM2CON = 0; //DISABLE PWM
     PR2 = 155; //20ms at 2MHz TOSC
     PWM2DCH = 0b00000110; //50% of period
-    PWM2DCL = 0b00; //Drop the 2 last bits of precisionx²
+    PWM2DCL = 0b00; //Drop the 2 last bits of precisionx
     PIR1bits.TMR2IF = 0b0; //clearing TMR2 interrupt flag
     T2CONbits.T2CKPS = 0b11; //PRESCALER 64
     T2CONbits.TMR2ON = 0b1; //TMR2 on 
     PWM2CON = 0b11000000; // PWM enable and output enable
 }
 
+void TIMER0_init(void){
+    
+}
+
+void TIMER1_init(void){
+    
+}
+
+void TIMER2_init(void){
+    
+}
 
 void interrupt timer(void){
+    if(PIE1bits.TXIE){
+        if(PIR1bits.TXIF){
+            if(msg != NULL && msg[i] != '\0'){           
+                TXREG = msg[i];
+                ++i;
+            }else{
+                msg = NULL;
+                PIE1bits.TXIE = 0b0; //disable sending
+                done = 1;
+            }
+        }
+        return;
+    }
     if(INTCONbits.TMR0IF){ // timer interrupt
         INTCONbits.TMR0IF = 0;
         TMR0 = 0;
@@ -112,11 +142,35 @@ void interrupt timer(void){
     return;
 }
 
+int calibrate(){
+    while(1){
+        //wait for next button to be clicked
+        if(uartValue == 0x31)
+            if(converstion)
+                return converstion;
+    }
+    
+}
+
+void send(char* str){
+    msg = str;
+    i = 0;
+    PIE1bits.TXIE = 0b1;
+    while(!done){}
+}
+
 int main() {
+    //State variables
     uint8_t bt = 0;
     uint8_t sensor = 0;
-    const uint8_t OPEN = 0b00010001;
-    const uint8_t CLOSE = 0b00000100;
+    uint8_t door = 0;
+    //Duty cycle value for the servo
+    const uint8_t OPEN = 0b00000100;
+    const uint8_t CLOSE = 0b00010001;
+    //Distance for the different states
+    uint16_t HAND = 312;
+    uint16_t NO_HAND = 200;
+    uint16_t DOOR_OPEN = 100;
     
     OSCCONbits.IRCF = 0b1100; //clock at 2MHz
     OSCCONbits.SPLLEN = 0b0; //PLL disable
@@ -136,17 +190,28 @@ int main() {
     ADC_init();
     UART_init();
     PWM_init();
+    
     while(1){
         if(converstion){
-            if(converstion > 312){
+            if(converstion >= HAND){ // a hand is visible
                 sensor = 1;
-                LATCbits.LATC2 = 0b1;
-            }else{
-                sensor = 0;
+                door = 0;
+                LATCbits.LATC1 = 0b1;
                 LATCbits.LATC2 = 0b0;
+            }else if(converstion <= DOOR_OPEN){ // door is opened
+                sensor = 0;
+                door = 1;
+                LATCbits.LATC1 = 0b0;
+                LATCbits.LATC2 = 0b1;
+            }else{ // door closed and no hand
+                sensor = 0;
+                door = 0;
+                LATCbits.LATC1 = 0b1;
+                LATCbits.LATC2 = 0b1;
             }
             converstion = 0;
-        } 
+        }
+        
         if(uartValue){
             if(uartValue == 0x31){
                 bt = 1;
@@ -154,10 +219,20 @@ int main() {
             }else if(uartValue == 0x32){   
                 bt = 0;
                 LATCbits.LATC1 = 0b0;
+            }else if(uartValue == 0x33){
+                PWM2DCH = OPEN;
+                send("hand\r\n");
+                HAND = calibrate();
+                uartValue = 0;
+                send("noHand\r\n");
+                NO_HAND = calibrate();
+                DOOR_OPEN = abs(NO_HAND - 100);
+                send("OK\r\n");
             }
             uartValue = 0;
         }
-        if(sensor || bt){
+        
+        if(sensor || bt || door){
             PWM2DCH = OPEN;
         }else{
             PWM2DCH = CLOSE;

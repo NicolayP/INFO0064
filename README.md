@@ -4,7 +4,7 @@
 ----------
 
 1. Combine every module (base of final code).
-2. Calibration module.
+2. Calibration module. (DONE check android)
 3. Battery check.
 4. Time check.
 5. Sleep mode if time.
