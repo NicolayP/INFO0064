@@ -54,7 +54,7 @@ volatile uint8_t j = 0;
 volatile uint16_t batteryInter = 0;
 volatile uint8_t uartValueInter = 0; // value read on the RX pin
 volatile uint8_t TIMER0_START = 0; // initial value for timer0 register
-
+volatile uint8_t count = 0;
 volatile uint8_t bt = 0;
 
 void ADC_init(void){
@@ -125,9 +125,12 @@ void TIMER1_init(void){
     T1CONbits.TMR1CS = 0b00; // FOSC/4
     T1CONbits.T1CKPS = 0b11; // 1:8 prescaler
     T1CONbits.T1OSCEN = 0b0; //Dedicated Timer1 oscillator circuit disabled
-    T1CONbits.nT1SYNC = 0b1; // Do not synchronize asynchronous clock input
-    PIE1bits.TMR1IE = 0b1;
+    T1CONbits.nT1SYNC = 0b0; // Do not synchronize asynchronous clock input
+    PIE1bits.TMR1IE = 0b1; // Interrupt enable
+    PIR1bits.TMR1IF = 0b0;
+    T1GCON = 0; // Gate control register
     T1CONbits.TMR1ON = 0b1;
+    
 }
 
 int calibrate(){
@@ -146,8 +149,10 @@ int calibrate(){
 }
 
 void send(char* str){
+    INTCONbits.GIE = 0b0;
     msg = str;
     i = 0;
+    INTCONbits.GIE = 0b1;
     PIE1bits.TXIE = 0b1;
     while(!done){}
 }
@@ -179,9 +184,9 @@ void interrupt interrupt_service(void){
     }
     if(PIR1bits.TMR1IF){
         PIR1bits.TMR1IF = 0b0;
-        TMR1H = 0;
-        TMR1L = 0;
-        bt = 0;
+        if(count == 4)
+            bt = 0;
+        count++;
     }
     if(PIR1bits.ADIF){ // A/D interrupt
         conversion = ((uint16_t)ADRESH << 8) | ADRESL;
@@ -190,10 +195,10 @@ void interrupt interrupt_service(void){
         if(change == 3){
             //we just got info from the sensor we switch to the battery
             sharpInter[j] = conversion;
-            if(sharpInter[j] >= sharpInter[(j+1)%2] - 10 || sharpInter[j] <= sharpInter[(j+1)%2] + 10){
-                sharpInter[2] = conversion;
+            if(abs(int(sharpInter[j] - sharpInter[(j+1)%2])) <= 10){
                 sharpInter[0] = 0;
                 sharpInter[1] = 0;
+                sharpInter[2] = conversion;
             }else{
                 j = (j+1)%2;
             }
@@ -227,6 +232,7 @@ int main() {
     
     uint8_t sensor = 0;
     uint8_t door = 0;
+    uint8_t low = 0;
     //Duty cycle value for the servo
     const uint8_t OPEN = 0b00000100;
     const uint8_t CLOSE = 0b00010001;
@@ -249,8 +255,12 @@ int main() {
     
     TMR0 = 0;
     TRISAbits.TRISA5 = 0b0;
+    LATAbits.LATA5 = 0b0;
     TRISCbits.TRISC2 = 0b0;
+    LATCbits.LATC2 = 0b0;
+    
     TIMER0_init();
+    TIMER1_init();
     ADC_init();
     UART_init();
     PWM_init();
@@ -290,11 +300,9 @@ int main() {
             batteryInter = 0;
             INTCONbits.GIE = 0b1;
             if(battery <= LOW_BATTERY){
-                LATCbits.LATC2 = 0b1;
-                LATAbits.LATA5 = 0b0; 
+                low = 1;
             }else{
-                LATCbits.LATC2 = 0b0;
-                LATAbits.LATA5 = 0b1;
+                low = 0;
             }
         }
         
@@ -307,24 +315,28 @@ int main() {
             INTCONbits.GIE = 0b1;
             if(uartValue == 0x31){
                 bt = 1;
-                LATCbits.LATC1 = 0b1;
+                //start timer upon which bt is set back to 0.
+                INTCONbits.GIE = 0b0;
+                PIR1bits.TMR1IF = 0b0;
+                TMR1H = 0;
+                TMR1L = 0;
+                count = 0;
+                INTCONbits.GIE = 0b1;
+                //LATCbits.LATC1 = 0b1;
             }else if(uartValue == 0x32){   
                 bt = 0;
-                LATCbits.LATC1 = 0b0;
+                //LATCbits.LATC1 = 0b0;
             }else if(uartValue == 0x33){
-                PWM2DCH = OPEN;
                 send("hand\r\n");
                 HAND = calibrate();
-                uartValue = 0;
                 send("noHand\r\n");
-                NO_HAND = calibrate();
-                DOOR_OPEN = abs(NO_HAND - 100);
+                DOOR_OPEN = abs(calibrate() -100);
                 send("OK\r\n");
             }
             uartValue = 0;
         }
         
-        if(sensor || bt || door){
+        if(sensor || bt || door || low){
             PWM2DCH = OPEN;
         }else{
             PWM2DCH = CLOSE;
